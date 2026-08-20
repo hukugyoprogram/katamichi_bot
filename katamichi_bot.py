@@ -54,7 +54,24 @@ def save_history(history_set):
         json.dump(clean_history, f, ensure_ascii=False, indent=2)
 
 # ==========================================================
-# 3. AIを使って空き枠を抽出する関数
+# 3. 利用可能なGeminiモデルの自動選定
+# ==========================================================
+def get_available_model_name():
+    """アカウントで利用可能なFlashモデルを自動検出"""
+    try:
+        models = list(gemini_client.models.list())
+        # flash系の生成可能モデルを優先検索
+        for m in models:
+            name = m.name.replace("models/", "")
+            if "flash" in name and ("generateContent" in getattr(m, "supported_generation_methods", []) or hasattr(m, "name")):
+                return name
+        # フォールバック
+        return "gemini-2.5-flash"
+    except Exception:
+        return "gemini-2.5-flash"
+
+# ==========================================================
+# 4. AIを使って空き枠を抽出する関数
 # ==========================================================
 def fetch_available_slots_with_ai():
     url = "https://cp.toyota.jp/rentacar/"
@@ -75,6 +92,9 @@ def fetch_available_slots_with_ai():
     if not gemini_client:
         print("❌ GEMINI_API_KEY が設定されていません。")
         return []
+
+    target_model = get_available_model_name()
+    print(f"🤖 選択されたAIモデル: {target_model}")
 
     prompt = f"""
 Webサイトのテキストからトヨタレンタカー「片道GO！」の【現在予約受付中（空き枠）】のみを抽出してください。
@@ -101,25 +121,22 @@ Webサイトのテキストからトヨタレンタカー「片道GO！」の【
 """
 
     res_text = None
-    # 複数の互換モデル名を順に試行
-    candidate_models = ["gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"]
-
-    for model_name in candidate_models:
+    for attempt in range(1, 4):
         try:
-            print(f"🤖 AIモデル ({model_name}) で解析中...")
+            print(f"🤖 AI解析中... (試行 {attempt}/3)")
             res = gemini_client.models.generate_content(
-                model=model_name,
+                model=target_model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
             res_text = res.text
-            if res_text:
-                break
+            break
         except Exception as e:
-            print(f"⚠️ {model_name} 試行エラー: {e}")
-            time.sleep(2)
+            print(f"⚠️ 試行 {attempt}/3 エラー: {e}")
+            if attempt < 3:
+                time.sleep(3)
 
     if not res_text:
         print("❌ AI解析に失敗しました。次回巡回時に再試行します。")
@@ -158,7 +175,7 @@ Webサイトのテキストからトヨタレンタカー「片道GO！」の【
         return []
 
 # ==========================================================
-# 4. X（Twitter）ポスト関数
+# 5. X（Twitter）ポスト関数
 # ==========================================================
 def post_to_x(slot) -> bool:
     if not x_client:
@@ -185,7 +202,7 @@ def post_to_x(slot) -> bool:
         return False
 
 # ==========================================================
-# 5. メイン実行処理
+# 6. メイン実行処理
 # ==========================================================
 def main():
     history = load_history()
