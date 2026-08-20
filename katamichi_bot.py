@@ -73,7 +73,6 @@ def fetch_katamichi_slots():
                 slot_id = clean_text[:60]
 
                 if slot_id and not any(s["id"] == slot_id for s in slots):
-                    # 4項目の個別抽出
                     dep_match = re.search(r"出発(?:店舗)?[:：\s]*([^\s,]+(?:店|営業所)?)", clean_text)
                     departure = dep_match.group(1) if dep_match else "詳細参照"
 
@@ -124,9 +123,9 @@ def post_to_x(slot) -> bool:
         return False
 
 # ==========================================================
-# 5. 1回のチェック＆更新処理
+# 5. メイン処理（1回実行して終了）
 # ==========================================================
-def run_check():
+def main():
     history = load_history()
     print(f"📁 過去の投稿履歴: {len(history)} 件を読込")
 
@@ -142,25 +141,8 @@ def run_check():
                 new_count += 1
                 time.sleep(2)
 
-    # 履歴を更新して保存
     save_history(history)
     print(f"🎉 処理完了: {new_count} 件の新着をポストしました。")
-
-# ==========================================================
-# 6. メイン実行（60秒おきに計10回チェック）
-# ==========================================================
-def main():
-    total_checks = 10      # 計10回チェック
-    interval_seconds = 50  # 1分（60秒）待機
-
-    for i in range(1, total_checks + 1):
-        print(f"\n🚀 === {i}/{total_checks} 回目のチェック開始 ===")
-        run_check()
-
-        # 最後の回以外は待機
-        if i < total_checks:
-            print(f"⏱️ {interval_seconds}秒待機して次回チェックを行います...")
-            time.sleep(interval_seconds)
 
 if __name__ == "__main__":
     main()
