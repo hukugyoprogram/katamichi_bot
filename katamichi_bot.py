@@ -7,9 +7,6 @@ from bs4 import BeautifulSoup
 import tweepy
 from dotenv import load_dotenv
 
-# ==========================================================
-# 1. 環境設定 & X API認証
-# ==========================================================
 load_dotenv()
 
 API_KEY = os.getenv("API_KEY")
@@ -31,9 +28,6 @@ if all([API_KEY, API_SECRET, ACCESS_TOKEN, ACCESS_TOKEN_SECRET]):
 
 HISTORY_FILE = "posted_slots.json"
 
-# ==========================================================
-# 2. 過去の投稿履歴の読み書き
-# ==========================================================
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -47,17 +41,10 @@ def save_history(history_set):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(list(history_set), f, ensure_ascii=False, indent=2)
 
-# ==========================================================
-# 3. 片道GOの情報を抽出する関数（ブロック構造対応）
-# ==========================================================
 def fetch_available_slots():
     url = "https://cp.toyota.jp/rentacar/"
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
     try:
@@ -66,45 +53,40 @@ def fetch_available_slots():
         soup = BeautifulSoup(response.text, "html.parser")
 
         slots = []
+        blocks = soup.find_all(["tr", "li", "div", "dl"])
         
-        # 枠情報が入っている可能性のあるブロック（tr, li, div, section, dl）を探索
-        blocks = soup.find_all(["tr", "li", "div", "section", "article", "dl"])
-        
-        found_blocks = 0
         for block in blocks:
             text = " ".join(block.get_text(separator=" ", strip=True).split())
 
-            # 枠に必要なキーワードが含まれているか
-            if not ("出発" in text and "返却" in text):
+            # ① 受付終了・規約・長文は除外
+            if any(ng in text for ng in ["受付終了", "受付を終了", "予約済", "最大48時間", "免責補償", "指定店舗となります"]):
                 continue
-            
-            # 親要素の巻き込み防止（長すぎるテキストや共通規約はスキップ）
-            if len(text) > 250 or "免責補償" in text or "最大48時間" in text:
+            if len(text) > 200 or len(text) < 15:
                 continue
 
-            found_blocks += 1
-
-            # ①「受付終了」の枠は除外
-            if "受付終了" in text or "受付を終了" in text or "予約済" in text:
-                continue
-
-            # 電話番号の検出
+            # ② 本物の予約枠に必須の「電話番号」をチェック（なければ即スキップ）
             tel_match = re.search(r"(0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}|0\d{9,10})", text)
-            tel = tel_match.group(1).replace(" ", "-") if tel_match else "公式参照"
+            if not tel_match:
+                continue
 
-            # 出発店舗・返却店舗・利用期間・車種の抽出
+            # ③ 出発店舗・返却店舗・利用期間の抽出
             dep_match = re.search(r"出発(?:店舗)?[:：\s]*([^\s,]+(?:店|営業所|空港)?)", text)
             ret_match = re.search(r"返却(?:地域|エリア|店舗)?[:：\s]*([^\s,]+)", text)
             period_match = re.search(r"(\d{1,2}[/月]\d{1,2}[^\s]*\s*[〜～~\-ー]\s*\d{1,2}[/月]\d{1,2}[^\s]*)", text)
             car_match = re.search(r"(?:車種|クラス)[:：\s]*([^\s,]+)", text)
 
-            departure = dep_match.group(1) if dep_match else "出発店舗は公式参照"
-            return_area = ret_match.group(1) if ret_match else "返却店舗は公式参照"
+            departure = dep_match.group(1) if dep_match else ""
+            return_area = ret_match.group(1) if ret_match else ""
             period = period_match.group(1) if period_match else "公式参照"
-            car_type = car_match.group(1) if car_match else "公式参照"
+            car_type = car_match.group(1) if car_match else "指定なし"
+            tel = tel_match.group(1).replace(" ", "-")
 
-            # 見出し行そのもの（ゴミデータ）をスキップ
-            if departure in ["店舗", "出発店舗"] and return_area in ["店舗", "返却店舗"]:
+            # ゴミデータ・見出し文字列の徹底排除
+            if not departure or not return_area:
+                continue
+            if departure in ["店舗", "出発店舗"] or return_area in ["店舗", "返却店舗", "車種"]:
+                continue
+            if "指定店舗" in departure or "指定店舗" in return_area:
                 continue
 
             slot_id = f"{departure}_{return_area}_{period}_{car_type}_{tel}"
@@ -120,19 +102,14 @@ def fetch_available_slots():
                     "url": url,
                 })
 
-        print(f"📄 検知した枠ブロック候補: {found_blocks} 件")
         return slots
 
     except Exception as e:
         print(f"⚠️ データ取得エラー: {e}")
         return []
 
-# ==========================================================
-# 4. X（Twitter）ポスト関数
-# ==========================================================
 def post_to_x(slot) -> bool:
     if not client:
-        print("⚠️ X APIが未設定です。")
         return False
 
     tweet_text = (
@@ -155,18 +132,13 @@ def post_to_x(slot) -> bool:
         print(f"❌ X投稿エラー: {e}")
         return False
 
-# ==========================================================
-# 5. メイン実行処理
-# ==========================================================
 def main():
     history = load_history()
     print(f"📁 過去の投稿履歴: {len(history)} 件を読込")
 
-    # 1. 現在の予約可能枠を取得（受付終了除外済み）
     available_slots = fetch_available_slots()
     print(f"🔍 現在の予約可能枠: {len(available_slots)} 件")
 
-    # 2. 前回の履歴（JSON）に入っていない新着枠だけを抽出
     new_post_count = 0
     for slot in available_slots:
         if slot["id"] not in history:
