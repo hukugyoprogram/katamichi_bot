@@ -1,9 +1,6 @@
 name: Katamichi GO Bot
 
 on:
-  schedule:
-    # 10分ごとに自動起動
-    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -26,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 tweepy python-dotenv
 
-      - name: Botを実行（1分おきに計10回巡回）
+      - name: Botを実行（1回チェック）
         env:
           API_KEY: ${{ secrets.API_KEY }}
           API_SECRET: ${{ secrets.API_SECRET }}
