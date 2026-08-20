@@ -42,17 +42,21 @@ def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
+                data = json.load(f)
+                # 過去の「公式参照」などのゴミデータは自動的に除外して読み込む
+                return set([x for x in data if "公式参照" not in x and "指定店舗" not in x])
         except Exception:
             return set()
     return set()
 
 def save_history(history_set):
+    # ゴミデータを除外して保存
+    clean_history = [x for x in history_set if "公式参照" not in x and "指定店舗" not in x]
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(history_set), f, ensure_ascii=False, indent=2)
+        json.dump(clean_history, f, ensure_ascii=False, indent=2)
 
 # ==========================================================
-# 3. AI（Gemini）を使って空き枠を抽出する関数
+# 3. AIを使って空き枠を抽出する関数
 # ==========================================================
 def fetch_available_slots_with_ai():
     url = "https://cp.toyota.jp/rentacar/"
@@ -75,24 +79,26 @@ def fetch_available_slots_with_ai():
         return []
 
     prompt = f"""
-Webサイトのテキストから「片道GO！」の【現在予約受付中（空き枠）】のみを抽出してください。
+Webサイトのテキストからトヨタレンタカー「片道GO！」の【現在予約受付中（空き枠）】のみを抽出してください。
 
 【厳格な除外条件】
-- 「受付終了」「受付を終了」「予約済」「満車」「終了」の記載がある枠は【絶対に1件も抽出しないでください】。
-- サイト内に受付中の枠がない場合は、必ず空の配列 `[]` のみを返してください。
+1. 「受付終了」「受付を終了」「予約済」「満車」と書かれている枠は【絶対に抽出しないでください】。
+2. 「注意書き」「利用手順」「規約」などの文章は【絶対に除外】してください。
+3. 出発店舗・返却店舗・電話番号が具体的に書かれていないものは除外してください。
+4. 受付中の枠がない場合は空の配列 `[]` を返してください。
 
-【出力フォーマット (JSON)】
+【出力形式 (JSON)】
 [
   {{
-    "departure": "出発店舗名",
-    "return_area": "返却店舗名",
+    "departure": "具体的な出発店舗名（例: 盛岡駅南口店）",
+    "return_area": "具体的な返却店舗・エリア名",
     "period": "出発期間",
     "car_type": "車種",
-    "tel": "電話番号"
+    "tel": "具体的な予約電話番号"
   }}
 ]
 
-【Webページテキスト】
+【Webテキスト】
 {page_text[:10000]}
 """
 
@@ -101,7 +107,7 @@ Webサイトのテキストから「片道GO！」の【現在予約受付中（
         try:
             print(f"🤖 AI（Gemini）が空き枠を解析中... (試行 {attempt}/3)")
             res = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-1.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -112,7 +118,7 @@ Webサイトのテキストから「片道GO！」の【現在予約受付中（
         except Exception as e:
             print(f"⚠️ AI接続エラー (試行 {attempt}/3): {e}")
             if attempt < 3:
-                time.sleep(5)
+                time.sleep(3)
 
     if not res_text:
         return []
@@ -127,10 +133,13 @@ Webサイトのテキストから「片道GO！」の【現在予約受付中（
             car = item.get("car_type", "").strip()
             tel = item.get("tel", "").strip()
 
-            if not dep or not ret:
+            # 店舗名や電話番号が欠落しているゴミデータは完全排除
+            if not dep or not ret or not tel:
+                continue
+            if any(ng in dep for ng in ["公式参照", "指定店舗", "店舗"]) or any(ng in ret for ng in ["公式参照", "指定店舗", "店舗"]):
                 continue
 
-            slot_id = f"{dep}_{ret}_{per}_{car}"
+            slot_id = f"{dep}_{ret}_{per}_{car}_{tel}"
             valid_slots.append({
                 "id": slot_id,
                 "departure": dep,
@@ -179,25 +188,23 @@ def post_to_x(slot) -> bool:
 # ==========================================================
 def main():
     history = load_history()
-    print(f"📁 過去の投稿履歴: {len(history)} 件を読込")
+    print(f"📁 クリーンな過去履歴: {len(history)} 件を読込")
 
     available_slots = fetch_available_slots_with_ai()
-    print(f"🔍 AIが検知した現在の予約可能枠: {len(available_slots)} 件")
+    print(f"🔍 AIが検知した受付中枠: {len(available_slots)} 件")
 
     # 未登録の枠を抽出
     new_slots = [s for s in available_slots if s["id"] not in history]
 
-    # 【大量誤検知・初回同期ガード】
-    # 一度に大量の新着（3件以上）が出た場合は、初回の同期とみなして投稿をスキップして保存
+    # 初回または大量同期ガード（爆撃防止）
     if len(new_slots) >= 3:
-        print(f"🛡️ 一度に {len(new_slots)} 件の新着を検知しました。爆撃投稿を防ぐため、今回は履歴の同期のみ行います。")
+        print(f"🛡️ {len(new_slots)} 件の枠を検知。初回同期のため履歴に一括保存します（投稿スキップ）。")
         for s in new_slots:
             history.add(s["id"])
         save_history(history)
-        print(f"💾 全件を履歴に登録完了。次回からの純粋な新着（1〜2件）のみが投稿されます。")
+        print(f"💾 {len(new_slots)} 件を綺麗に履歴へ保存しました。次回以降の新着から投稿されます。")
         return
 
-    # 通常の新着投稿処理
     new_post_count = 0
     for slot in new_slots:
         print(f"✨ 新着枠を検知: {slot['departure']} ➔ {slot['return_area']}（{slot['car_type']} / TEL: {slot['tel']}）")
