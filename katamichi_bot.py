@@ -13,11 +13,9 @@ load_dotenv()
 # ==========================================================
 # 1. API初期化
 # ==========================================================
-# Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# X API
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
@@ -100,7 +98,7 @@ def fetch_available_slots_with_ai():
     try:
         print("🤖 AI（Gemini）が空き枠を解析中...")
         res = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
