@@ -48,7 +48,7 @@ def save_history(history_set):
         json.dump(list(history_set), f, ensure_ascii=False, indent=2)
 
 # ==========================================================
-# 3. 片道GOの情報を抽出する関数
+# 3. 片道GOの情報を抽出する関数（ブロック構造対応）
 # ==========================================================
 def fetch_available_slots():
     url = "https://cp.toyota.jp/rentacar/"
@@ -66,42 +66,46 @@ def fetch_available_slots():
         soup = BeautifulSoup(response.text, "html.parser")
 
         slots = []
-        rows = soup.find_all("tr")
-        print(f"📄 サイト内の全テーブル行数: {len(rows)} 行")
+        
+        # 枠情報が入っている可能性のあるブロック（tr, li, div, section, dl）を探索
+        blocks = soup.find_all(["tr", "li", "div", "section", "article", "dl"])
+        
+        found_blocks = 0
+        for block in blocks:
+            text = " ".join(block.get_text(separator=" ", strip=True).split())
 
-        for row in rows:
-            # 行全体のテキストを取得
-            row_text = row.get_text(separator=" ", strip=True)
+            # 枠に必要なキーワードが含まれているか
+            if not ("出発" in text and "返却" in text):
+                continue
+            
+            # 親要素の巻き込み防止（長すぎるテキストや共通規約はスキップ）
+            if len(text) > 250 or "免責補償" in text or "最大48時間" in text:
+                continue
+
+            found_blocks += 1
 
             # ①「受付終了」の枠は除外
-            if "受付終了" in row_text or "受付を終了" in row_text:
+            if "受付終了" in text or "受付を終了" in text or "予約済" in text:
                 continue
 
-            # ② ヘッダー行や説明文を除外（「出発店舗」「返却店舗」という見出し文字そのままの行など）
-            if "利用可能時間" in row_text or "最大48時間" in row_text or "免責補償" in row_text:
+            # 電話番号の検出
+            tel_match = re.search(r"(0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}|0\d{9,10})", text)
+            tel = tel_match.group(1).replace(" ", "-") if tel_match else "公式参照"
+
+            # 出発店舗・返却店舗・利用期間・車種の抽出
+            dep_match = re.search(r"出発(?:店舗)?[:：\s]*([^\s,]+(?:店|営業所|空港)?)", text)
+            ret_match = re.search(r"返却(?:地域|エリア|店舗)?[:：\s]*([^\s,]+)", text)
+            period_match = re.search(r"(\d{1,2}[/月]\d{1,2}[^\s]*\s*[〜～~\-ー]\s*\d{1,2}[/月]\d{1,2}[^\s]*)", text)
+            car_match = re.search(r"(?:車種|クラス)[:：\s]*([^\s,]+)", text)
+
+            departure = dep_match.group(1) if dep_match else "出発店舗は公式参照"
+            return_area = ret_match.group(1) if ret_match else "返却店舗は公式参照"
+            period = period_match.group(1) if period_match else "公式参照"
+            car_type = car_match.group(1) if car_match else "公式参照"
+
+            # 見出し行そのもの（ゴミデータ）をスキップ
+            if departure in ["店舗", "出発店舗"] and return_area in ["店舗", "返却店舗"]:
                 continue
-
-            # 行の中にあるセル（td または th）をすべて取得
-            cells = row.find_all(["td", "th"])
-            if len(cells) < 3:
-                continue
-
-            # 各セルの文字をそのまま取得
-            cell_texts = [re.sub(r"\s+", " ", c.get_text(strip=True)) for c in cells]
-
-            # 見出し行そのものの場合はスキップ
-            if cell_texts[0] in ["出発店舗", "店舗", "No.", "出発地"]:
-                continue
-
-            # 電話番号の抽出
-            tel_match = re.search(r"(0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}|0\d{9,10})", row_text)
-            tel = tel_match.group(1).replace(" ", "-") if tel_match else "電話番号は公式参照"
-
-            # サイトの並び順通りに代入
-            departure = cell_texts[0] if len(cell_texts) > 0 else "公式参照"
-            return_area = cell_texts[1] if len(cell_texts) > 1 else "公式参照"
-            period = cell_texts[2] if len(cell_texts) > 2 else "公式参照"
-            car_type = cell_texts[3] if len(cell_texts) > 3 else "公式参照"
 
             slot_id = f"{departure}_{return_area}_{period}_{car_type}_{tel}"
 
@@ -116,6 +120,7 @@ def fetch_available_slots():
                     "url": url,
                 })
 
+        print(f"📄 検知した枠ブロック候補: {found_blocks} 件")
         return slots
 
     except Exception as e:
@@ -157,20 +162,11 @@ def main():
     history = load_history()
     print(f"📁 過去の投稿履歴: {len(history)} 件を読込")
 
-    # 1. 現在の予約可能枠を取得
+    # 1. 現在の予約可能枠を取得（受付終了除外済み）
     available_slots = fetch_available_slots()
     print(f"🔍 現在の予約可能枠: {len(available_slots)} 件")
 
-    # 【初期化モード】初回起動時は今ある全枠を記録して終了（爆撃投稿防止）
-    if len(history) == 0 and len(available_slots) > 0:
-        print("🛡️ 【初期化モード】初回起動のため、現在の枠を履歴に記録して終了します。")
-        for slot in available_slots:
-            history.add(slot["id"])
-        save_history(history)
-        print(f"💾 {len(available_slots)} 件を履歴に保存しました。次回以降の新着枠から投稿されます。")
-        return
-
-    # 2. 前回見つけていなかった（履歴にない）新着枠だけを抽出して投稿
+    # 2. 前回の履歴（JSON）に入っていない新着枠だけを抽出
     new_post_count = 0
     for slot in available_slots:
         if slot["id"] not in history:
