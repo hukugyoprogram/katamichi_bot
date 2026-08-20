@@ -43,14 +43,12 @@ def load_history():
         try:
             with open(HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # 過去の「公式参照」などのゴミデータは自動的に除外して読み込む
                 return set([x for x in data if "公式参照" not in x and "指定店舗" not in x])
         except Exception:
             return set()
     return set()
 
 def save_history(history_set):
-    # ゴミデータを除外して保存
     clean_history = [x for x in history_set if "公式参照" not in x and "指定店舗" not in x]
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(clean_history, f, ensure_ascii=False, indent=2)
@@ -103,24 +101,28 @@ Webサイトのテキストからトヨタレンタカー「片道GO！」の【
 """
 
     res_text = None
-    for attempt in range(1, 4):
+    # 複数の互換モデル名を順に試行
+    candidate_models = ["gemini-2.0-flash", "gemini-2.0-flash-001", "gemini-1.5-flash-latest"]
+
+    for model_name in candidate_models:
         try:
-            print(f"🤖 AI（Gemini）が空き枠を解析中... (試行 {attempt}/3)")
+            print(f"🤖 AIモデル ({model_name}) で解析中...")
             res = gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model=model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
             res_text = res.text
-            break
+            if res_text:
+                break
         except Exception as e:
-            print(f"⚠️ AI接続エラー (試行 {attempt}/3): {e}")
-            if attempt < 3:
-                time.sleep(3)
+            print(f"⚠️ {model_name} 試行エラー: {e}")
+            time.sleep(2)
 
     if not res_text:
+        print("❌ AI解析に失敗しました。次回巡回時に再試行します。")
         return []
 
     try:
@@ -133,7 +135,6 @@ Webサイトのテキストからトヨタレンタカー「片道GO！」の【
             car = item.get("car_type", "").strip()
             tel = item.get("tel", "").strip()
 
-            # 店舗名や電話番号が欠落しているゴミデータは完全排除
             if not dep or not ret or not tel:
                 continue
             if any(ng in dep for ng in ["公式参照", "指定店舗", "店舗"]) or any(ng in ret for ng in ["公式参照", "指定店舗", "店舗"]):
@@ -193,16 +194,14 @@ def main():
     available_slots = fetch_available_slots_with_ai()
     print(f"🔍 AIが検知した受付中枠: {len(available_slots)} 件")
 
-    # 未登録の枠を抽出
     new_slots = [s for s in available_slots if s["id"] not in history]
 
-    # 初回または大量同期ガード（爆撃防止）
     if len(new_slots) >= 3:
         print(f"🛡️ {len(new_slots)} 件の枠を検知。初回同期のため履歴に一括保存します（投稿スキップ）。")
         for s in new_slots:
             history.add(s["id"])
         save_history(history)
-        print(f"💾 {len(new_slots)} 件を綺麗に履歴へ保存しました。次回以降の新着から投稿されます。")
+        print(f"💾 {len(new_slots)} 件を綺麗に履歴へ保存しました。")
         return
 
     new_post_count = 0
