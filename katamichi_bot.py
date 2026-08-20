@@ -151,7 +151,7 @@ def run_check():
 # ==========================================================
 def main():
     total_checks = 10      # 計10回チェック
-    interval_seconds = 60  # 1分（60秒）待機
+    interval_seconds = 50  # 1分（60秒）待機
 
     for i in range(1, total_checks + 1):
         print(f"\n🚀 === {i}/{total_checks} 回目のチェック開始 ===")
