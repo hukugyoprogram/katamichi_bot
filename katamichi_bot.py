@@ -54,21 +54,25 @@ def save_history(history_set):
         json.dump(clean_history, f, ensure_ascii=False, indent=2)
 
 # ==========================================================
-# 3. 利用可能なGeminiモデルの自動選定
+# 3. 実際にAPIキーで使えるモデルを自動検出
 # ==========================================================
 def get_available_model_name():
-    """アカウントで利用可能なFlashモデルを自動検出"""
+    """現在のアカウントで generateContent が実行可能なモデルを自動取得"""
     try:
         models = list(gemini_client.models.list())
-        # flash系の生成可能モデルを優先検索
+        for m in models:
+            actions = getattr(m, "supported_actions", []) or []
+            if "generateContent" in actions:
+                name = m.name.replace("models/", "")
+                if "flash" in name:
+                    return name
         for m in models:
             name = m.name.replace("models/", "")
-            if "flash" in name and ("generateContent" in getattr(m, "supported_generation_methods", []) or hasattr(m, "name")):
+            if "flash" in name:
                 return name
-        # フォールバック
-        return "gemini-2.5-flash"
-    except Exception:
-        return "gemini-2.5-flash"
+    except Exception as e:
+        print(f"⚠️ モデル一覧取得警告: {e}")
+    return "gemini-1.5-flash-8b"
 
 # ==========================================================
 # 4. AIを使って空き枠を抽出する関数
@@ -94,7 +98,7 @@ def fetch_available_slots_with_ai():
         return []
 
     target_model = get_available_model_name()
-    print(f"🤖 選択されたAIモデル: {target_model}")
+    print(f"🤖 自動検出された有効AIモデル: {target_model}")
 
     prompt = f"""
 Webサイトのテキストからトヨタレンタカー「片道GO！」の【現在予約受付中（空き枠）】のみを抽出してください。
