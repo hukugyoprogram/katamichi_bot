@@ -2,11 +2,10 @@ name: Katamichi GO Bot
 
 on:
   schedule:
-    # 15分ごとに実行
-    - cron: '*/15 * * * *'
+    # 5分ごとに実行
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
-# 履歴ファイルを書き込んで保存するための権限設定
 permissions:
   contents: write
 
