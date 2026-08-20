@@ -2,8 +2,8 @@ name: Katamichi GO Bot
 
 on:
   schedule:
-    # 5分ごとに自動起動
-    - cron: '*/5 * * * *'
+    # 10分ごとに自動起動
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
