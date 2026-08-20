@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -123,9 +124,9 @@ def post_to_x(slot) -> bool:
         return False
 
 # ==========================================================
-# 5. メイン処理（1回チェックして終了）
+# 5. 1回のチェック＆更新処理
 # ==========================================================
-def main():
+def run_check():
     history = load_history()
     print(f"📁 過去の投稿履歴: {len(history)} 件を読込")
 
@@ -139,10 +140,27 @@ def main():
             if post_to_x(slot):
                 history.add(slot["id"])
                 new_count += 1
+                time.sleep(2)
 
     # 履歴を更新して保存
     save_history(history)
     print(f"🎉 処理完了: {new_count} 件の新着をポストしました。")
+
+# ==========================================================
+# 6. メイン実行（60秒おきに計10回チェック）
+# ==========================================================
+def main():
+    total_checks = 10      # 計10回チェック
+    interval_seconds = 60  # 1分（60秒）待機
+
+    for i in range(1, total_checks + 1):
+        print(f"\n🚀 === {i}/{total_checks} 回目のチェック開始 ===")
+        run_check()
+
+        # 最後の回以外は待機
+        if i < total_checks:
+            print(f"⏱️ {interval_seconds}秒待機して次回チェックを行います...")
+            time.sleep(interval_seconds)
 
 if __name__ == "__main__":
     main()
