@@ -66,49 +66,42 @@ def fetch_available_slots():
         soup = BeautifulSoup(response.text, "html.parser")
 
         slots = []
-        
-        # 枠ごとのテーブル行（tr）またはブロックを走査
-        elements = soup.find_all(["tr", "div", "li"])
-        
-        for el in elements:
+
+        # テーブルの各行（tr）およびリスト要素を精査
+        target_elements = soup.find_all(["tr", "li", "dl"])
+
+        for el in target_elements:
             text = " ".join(el.get_text(separator=" ", strip=True).split())
 
-            # ----------------------------------------------------
-            # ① 予約済み・終了枠・ヘッダー・無関係テキストの完全除外
-            # ----------------------------------------------------
-            if any(ng in text for ng in ["受付終了", "予約済", "終了", "受付期間外", "最大48時間", "免責補償"]):
+            # 1. 予約済みの枠やヘッダーをピンポイントで除外
+            if "受付を終了" in text or "予約済み" in text or "受付終了" in text:
                 continue
-            
-            # ----------------------------------------------------
-            # ②「電話番号」の存在チェック（予約可能枠は必ずTELがある）
-            # ----------------------------------------------------
+            if len(text) < 25:
+                continue
+
+            # 2. 電話番号（店舗TEL）が存在するか
             tel_match = re.search(r"(0\d{1,4}-\d{1,4}-\d{3,4}|0\d{9,10})", text)
             if not tel_match:
                 continue
 
-            # ----------------------------------------------------
-            # ③「利用期間（日付）」の存在チェック
-            # ----------------------------------------------------
+            # 3. 日付（利用期間）が存在するか
             period_match = re.search(r"(\d{1,2}[/月]\d{1,2}[^\s]*\s*〜\s*\d{1,2}[/月]\d{1,2}[^\s]*)", text)
             if not period_match:
                 continue
 
-            # ----------------------------------------------------
-            # ④ 出発店舗・返却エリアの抽出
-            # ----------------------------------------------------
-            dep_match = re.search(r"(?:出発|店舗)[:：\s]*([^\s,]+(?:店|営業所)?)", text)
+            # 4. 出発店舗・返却先エリアの抽出
+            dep_match = re.search(r"(?:出発|店舗)[:：\s]*([^\s,]+(?:店|営業所|空港)?)", text)
             ret_match = re.search(r"(?:返却|エリア)[:：\s]*([^\s,]+)", text)
 
-            departure = dep_match.group(1) if dep_match else "出発店舗は公式参照"
-            return_area = ret_match.group(1) if ret_match else "返却エリアは公式参照"
+            departure = dep_match.group(1) if dep_match else "店舗詳細は公式参照"
+            return_area = ret_match.group(1) if ret_match else "返却先は公式参照"
             tel = tel_match.group(1)
             period = period_match.group(1)
 
-            # ゴミデータ排除（見出し文字がそのまま取れた場合）
+            # ゴミデータ排除（見出し文字列の誤取得防止）
             if departure in ["店舗", "出発店舗"] or return_area in ["店舗", "車種", "返却店舗"]:
                 continue
 
-            # 重複防止用の一意なID（店舗名+返却先+期間+電話番号）
             slot_id = f"{departure}_{return_area}_{period}_{tel}"
 
             if not any(s["id"] == slot_id for s in slots):
@@ -164,7 +157,7 @@ def main():
     available_slots = fetch_available_slots()
     print(f"🔍 現在の予約可能枠: {len(available_slots)} 件")
 
-    # 初回起動時（履歴ファイルが空の場合）は一括保存して即終了（スパム防止）
+    # 初回起動時（履歴ファイルが空の場合）は一括保存して即終了（スパム・制限防止）
     if len(history) == 0 and len(available_slots) > 0:
         print("🛡️ 【初期化モード】初回のため現在の空き枠を履歴に記録して終了します。")
         for slot in available_slots:
@@ -183,7 +176,6 @@ def main():
                 new_post_count += 1
                 time.sleep(2)
             else:
-                # 投稿失敗時（API制限中など）も次回のリトライ連打を防ぐため履歴に一旦追加
                 history.add(slot["id"])
 
     save_history(history)
