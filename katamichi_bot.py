@@ -48,7 +48,7 @@ def save_history(history_set):
         json.dump(list(history_set), f, ensure_ascii=False, indent=2)
 
 # ==========================================================
-# 3. 片道GOの情報をそのまま抽出する関数
+# 3. 片道GOの空き枠取得（柔軟判定 & デバッグ出力）
 # ==========================================================
 def fetch_available_slots():
     url = "https://cp.toyota.jp/rentacar/"
@@ -66,37 +66,36 @@ def fetch_available_slots():
         soup = BeautifulSoup(response.text, "html.parser")
 
         slots = []
-        rows = soup.find_all("tr")
+        
+        # trだけでなく、li, dl, div などのブロック要素も走査
+        targets = soup.find_all(["tr", "li", "dl", "div"])
 
-        for row in rows:
-            # 1. 見出し行（thを含む行）はスキップ
-            if row.find("th"):
+        for target in targets:
+            text = " ".join(target.get_text(separator=" ", strip=True).split())
+
+            # 受付終了枠・長すぎる親要素・短すぎるヘッダーをスキップ
+            if "受付終了" in text or "受付を終了" in text:
+                continue
+            if len(text) > 300 or len(text) < 20:
                 continue
 
-            row_text = " ".join(row.get_text(separator=" ", strip=True).split())
-
-            # 2. 「受付終了」の枠は除外
-            if "受付終了" in row_text or "受付を終了" in row_text:
-                continue
-
-            cells = row.find_all("td")
-            # データ列が揃っている行のみを対象
-            if len(cells) < 4:
-                continue
-
-            # 電話番号の存在確認
-            tel_match = re.search(r"(0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}|0\d{9,10})", row_text)
+            # 電話番号の検出
+            tel_match = re.search(r"(0\d{1,4}[-\s]?\d{1,4}[-\s]?\d{3,4}|0\d{9,10})", text)
             if not tel_match:
                 continue
 
-            # 各セルのテキストをそのまま取得
-            cell_texts = [re.sub(r"\s+", " ", td.get_text(strip=True)) for td in cells]
+            # 「店」「営業所」「空港」などレンタカー拠点らしき文言が含まれるか
+            if not any(k in text for k in ["店", "営業所", "空港", "出発", "返却"]):
+                continue
 
-            # テーブルの列並びに合わせてそのまま代入
-            departure = cell_texts[0] if len(cell_texts) > 0 else "公式参照"
-            return_area = cell_texts[1] if len(cell_texts) > 1 else "公式参照"
-            period = cell_texts[2] if len(cell_texts) > 2 else "公式参照"
-            car_type = cell_texts[3] if len(cell_texts) > 3 else "公式参照"
+            # 要素内のセル・子要素からテキストを分割抽出
+            parts = [el.get_text(strip=True) for el in target.find_all(["td", "th", "dd", "dt", "p", "span"]) if el.get_text(strip=True)]
+            
+            # 各要素が取れている場合はそれを使用、取れない場合は全文から抽出
+            departure = parts[0] if len(parts) > 0 else "公式参照"
+            return_area = parts[1] if len(parts) > 1 else "公式参照"
+            period = parts[2] if len(parts) > 2 else "公式参照"
+            car_type = parts[3] if len(parts) > 3 else "公式参照"
             tel = tel_match.group(1).replace(" ", "-")
 
             slot_id = f"{departure}_{return_area}_{period}_{car_type}_{tel}"
@@ -110,6 +109,7 @@ def fetch_available_slots():
                     "car_type": car_type,
                     "tel": tel,
                     "url": url,
+                    "raw_text": text[:60] # デバッグ確認用
                 })
 
         return slots
@@ -156,6 +156,10 @@ def main():
     available_slots = fetch_available_slots()
     print(f"🔍 現在の予約可能枠: {len(available_slots)} 件")
 
+    # 取得できた枠があればログに先頭サンプルを出力
+    for s in available_slots[:3]:
+        print(f"  └ 取得データ例: {s['raw_text']}")
+
     # 初回起動時は一括記録して終了（一斉ツイート防止）
     if len(history) == 0 and len(available_slots) > 0:
         print("🛡️ 【初期化モード】初回起動のため、現在の枠を履歴に記録して終了します。")
@@ -168,7 +172,7 @@ def main():
     new_post_count = 0
     for slot in available_slots:
         if slot["id"] not in history:
-            print(f"✨ 新着枠: {slot['departure']} ➔ {slot['return_area']}（{slot['car_type']} / TEL: {slot['tel']}）")
+            print(f"✨ 新着枠: {slot['departure']} ➔ {slot['return_area']}（TEL: {slot['tel']}）")
             
             if post_to_x(slot):
                 history.add(slot["id"])
